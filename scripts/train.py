@@ -33,6 +33,7 @@ parser.add_argument('--loader_num_workers', default=4, type=int)
 parser.add_argument('--obs_len', default=8, type=int)
 parser.add_argument('--pred_len', default=8, type=int)
 parser.add_argument('--skip', default=1, type=int)
+parser.add_argument('--val_scene', default='08', type=str)
 
 # Optimization
 parser.add_argument('--batch_size', default=64, type=int)
@@ -40,51 +41,51 @@ parser.add_argument('--num_iterations', default=10000, type=int)
 parser.add_argument('--num_epochs', default=200, type=int)
 
 # Model Options
-parser.add_argument('--embedding_dim', default=64, type=int)
+parser.add_argument('--embedding_dim', default=16, type=int)
 parser.add_argument('--num_layers', default=1, type=int)
 parser.add_argument('--dropout', default=0, type=float)
 parser.add_argument('--batch_norm', default=0, type=bool_flag)
-parser.add_argument('--mlp_dim', default=1024, type=int)
+parser.add_argument('--mlp_dim', default=64, type=int)
 
 # Generator Options
-parser.add_argument('--encoder_h_dim_g', default=64, type=int)
+parser.add_argument('--encoder_h_dim_g', default=32, type=int)
 parser.add_argument('--decoder_h_dim_g', default=128, type=int)
 parser.add_argument('--noise_dim', default=None, type=int_tuple)
 parser.add_argument('--noise_type', default='gaussian')
-parser.add_argument('--noise_mix_type', default='ped')
-parser.add_argument('--clipping_threshold_g', default=0, type=float)
-parser.add_argument('--g_learning_rate', default=5e-4, type=float)
+parser.add_argument('--noise_mix_type', default='global')
+parser.add_argument('--clipping_threshold_g', default=2.0, type=float)
+parser.add_argument('--g_learning_rate', default=0.0001, type=float)
 parser.add_argument('--g_steps', default=1, type=int)
 
 # Pooling Options
-parser.add_argument('--pooling_type', default='pool_net')
-parser.add_argument('--pool_every_timestep', default=1, type=bool_flag)
+parser.add_argument('--pooling_type', default='none')
+parser.add_argument('--pool_every_timestep', default=0, type=bool_flag)
 
 # Pool Net Option
-parser.add_argument('--bottleneck_dim', default=1024, type=int)
+parser.add_argument('--bottleneck_dim', default=8, type=int)
 
 # Social Pooling Options
 parser.add_argument('--neighborhood_size', default=2.0, type=float)
 parser.add_argument('--grid_size', default=8, type=int)
 
 # Discriminator Options
-parser.add_argument('--d_type', default='local', type=str)
-parser.add_argument('--encoder_h_dim_d', default=64, type=int)
-parser.add_argument('--d_learning_rate', default=5e-4, type=float)
-parser.add_argument('--d_steps', default=2, type=int)
+parser.add_argument('--d_type', default='global', type=str)
+parser.add_argument('--encoder_h_dim_d', default=48, type=int)
+parser.add_argument('--d_learning_rate', default=0.001, type=float)
+parser.add_argument('--d_steps', default=1, type=int)
 parser.add_argument('--clipping_threshold_d', default=0, type=float)
 
 # Loss Options
-parser.add_argument('--l2_loss_weight', default=0, type=float)
-parser.add_argument('--best_k', default=1, type=int)
+parser.add_argument('--l2_loss_weight', default=1.0, type=float)
+parser.add_argument('--best_k', default=20, type=int)
 
 # Output
 parser.add_argument('--output_dir', default=os.getcwd())
-parser.add_argument('--print_every', default=5, type=int)
-parser.add_argument('--checkpoint_every', default=100, type=int)
+parser.add_argument('--print_every', default=100, type=int)
+parser.add_argument('--checkpoint_every', default=300, type=int)
 parser.add_argument('--checkpoint_name', default='checkpoint')
 parser.add_argument('--checkpoint_start_from', default=None)
-parser.add_argument('--restore_from_checkpoint', default=1, type=int)
+parser.add_argument('--restore_from_checkpoint', default=0, type=int)
 parser.add_argument('--num_samples_check', default=5000, type=int)
 
 # Misc
@@ -112,13 +113,15 @@ def main(args):
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_num
     train_path = get_dset_path(args.dataset_name, 'train')
     val_path = get_dset_path(args.dataset_name, 'val')
+    print("Train path: {}".format(train_path))
+    print("Validation path: {}".format(val_path))
 
     long_dtype, float_dtype = get_dtypes(args)
 
     logger.info("Initializing train dataset")
-    train_dset, train_loader = data_loader(args, train_path)
+    train_dset, train_loader = data_loader(args, train_path, val=False)
     logger.info("Initializing val dataset")
-    _, val_loader = data_loader(args, val_path)
+    _, val_loader = data_loader(args, val_path, val=True)
 
     iterations_per_epoch = len(train_dset) / args.batch_size / args.d_steps
     if args.num_epochs:
@@ -284,7 +287,7 @@ def main(args):
                 checkpoint['losses_ts'].append(t)
 
             # Maybe save a checkpoint
-            if t > 0 and t % args.checkpoint_every == 0:
+            if t > 0 and t % args.checkpoint_every == 0 and False:
                 checkpoint['counters']['t'] = t
                 checkpoint['counters']['epoch'] = epoch
                 checkpoint['sample_ts'].append(t)
@@ -355,7 +358,74 @@ def main(args):
             t += 1
             d_steps_left = args.d_steps
             g_steps_left = args.g_steps
+
             if t >= args.num_iterations:
+                checkpoint['counters']['t'] = t
+                checkpoint['counters']['epoch'] = epoch
+                checkpoint['sample_ts'].append(t)
+
+                # Check stats on the validation set
+                logger.info('Checking stats on val ...')
+                metrics_val = check_accuracy(
+                    args, val_loader, generator, discriminator, d_loss_fn
+                )
+                logger.info('Checking stats on train ...')
+                metrics_train = check_accuracy(
+                    args, train_loader, generator, discriminator,
+                    d_loss_fn, limit=True
+                )
+
+                for k, v in sorted(metrics_val.items()):
+                    logger.info('  [val] {}: {:.3f}'.format(k, v))
+                    checkpoint['metrics_val'][k].append(v)
+                for k, v in sorted(metrics_train.items()):
+                    logger.info('  [train] {}: {:.3f}'.format(k, v))
+                    checkpoint['metrics_train'][k].append(v)
+
+                min_ade = min(checkpoint['metrics_val']['ade'])
+                min_ade_nl = min(checkpoint['metrics_val']['ade_nl'])
+
+                if metrics_val['ade'] == min_ade:
+                    logger.info('New low for avg_disp_error')
+                    checkpoint['best_t'] = t
+                    checkpoint['g_best_state'] = generator.state_dict()
+                    checkpoint['d_best_state'] = discriminator.state_dict()
+
+                if metrics_val['ade_nl'] == min_ade_nl:
+                    logger.info('New low for avg_disp_error_nl')
+                    checkpoint['best_t_nl'] = t
+                    checkpoint['g_best_nl_state'] = generator.state_dict()
+                    checkpoint['d_best_nl_state'] = discriminator.state_dict()
+
+                # Save another checkpoint with model weights and
+                # optimizer state
+                checkpoint['g_state'] = generator.state_dict()
+                checkpoint['g_optim_state'] = optimizer_g.state_dict()
+                checkpoint['d_state'] = discriminator.state_dict()
+                checkpoint['d_optim_state'] = optimizer_d.state_dict()
+                checkpoint_path = os.path.join(
+                    args.output_dir, '%s_with_model.pt' % args.checkpoint_name
+                )
+                logger.info('Saving checkpoint to {}'.format(checkpoint_path))
+                torch.save(checkpoint, checkpoint_path)
+                logger.info('Done.')
+
+                # Save a checkpoint with no model weights by making a shallow
+                # copy of the checkpoint excluding some items
+                checkpoint_path = os.path.join(
+                    args.output_dir, '%s_no_model.pt' % args.checkpoint_name)
+                logger.info('Saving checkpoint to {}'.format(checkpoint_path))
+                key_blacklist = [
+                    'g_state', 'd_state', 'g_best_state', 'g_best_nl_state',
+                    'g_optim_state', 'd_optim_state', 'd_best_state',
+                    'd_best_nl_state'
+                ]
+                small_checkpoint = {}
+                for k, v in checkpoint.items():
+                    if k not in key_blacklist:
+                        small_checkpoint[k] = v
+                torch.save(small_checkpoint, checkpoint_path)
+                logger.info('Done.')
                 break
 
 

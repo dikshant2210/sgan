@@ -13,6 +13,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model_path', type=str)
 parser.add_argument('--num_samples', default=20, type=int)
 parser.add_argument('--dset_type', default='test', type=str)
+parser.add_argument('--val_scene', default='08', type=str)
 
 
 def get_generator(checkpoint):
@@ -105,8 +106,9 @@ def main(args):
         checkpoint = torch.load(path)
         generator = get_generator(checkpoint)
         _args = AttrDict(checkpoint['args'])
+        _args.val_scene = args.val_scene
         path = get_dset_path(_args.dataset_name, args.dset_type)
-        _, loader = data_loader(_args, path)
+        _, loader = data_loader(_args, path, val=True)
         ade, fde = evaluate(_args, loader, generator, args.num_samples)
         print('Dataset: {}, Pred Len: {}, ADE: {:.2f}, FDE: {:.2f}'.format(
             _args.dataset_name, _args.pred_len, ade, fde))
