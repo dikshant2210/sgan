@@ -72,7 +72,7 @@ class TrajectoryDataset(Dataset):
     """Dataloder for the Trajectory datasets"""
     def __init__(
         self, data_dir, obs_len=8, pred_len=12, skip=1, threshold=0.002,
-        min_ped=1, delim='\t'
+        min_ped=1, delim='\t', val_file=None, val=False
     ):
         """
         Args:
@@ -94,9 +94,21 @@ class TrajectoryDataset(Dataset):
         self.skip = skip
         self.seq_len = self.obs_len + self.pred_len
         self.delim = delim
+        self.val_file = val_file
 
         all_files = os.listdir(self.data_dir)
         all_files = [os.path.join(self.data_dir, _path) for _path in all_files]
+        temp = list()
+        if val:
+            for f in all_files:
+                if self.val_file in f:
+                    temp.append(f)
+        else:
+            for f in all_files:
+                if self.val_file not in f:
+                    temp.append(f)
+        all_files = temp
+
         num_peds_in_seq = []
         seq_list = []
         seq_list_rel = []
@@ -110,8 +122,9 @@ class TrajectoryDataset(Dataset):
                 frame_data.append(data[frame == data[:, 0], :])
             num_sequences = int(
                 math.ceil((len(frames) - self.seq_len + 1) / skip))
+            print(path, num_sequences)
 
-            for idx in range(0, num_sequences * self.skip + 1, skip):
+            for idx in range(0, num_sequences * self.skip, skip):
                 curr_seq_data = np.concatenate(
                     frame_data[idx:idx + self.seq_len], axis=0)
                 peds_in_curr_seq = np.unique(curr_seq_data[:, 1])
